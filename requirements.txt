@@ -1,0 +1,15 @@
+numpy
+pandas
+sounddevice
+scipy
+faster-whisper
+pydub
+pyaudio
+librosa
+pydantic
+langchain
+langchain-core
+langchain-community
+langchain-ollama
+
+
