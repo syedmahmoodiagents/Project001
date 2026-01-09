@@ -2,30 +2,30 @@
 import re
 import soundfile as sf
 import pyttsx3
-import socket
+
 from faster_whisper import WhisperModel
 from pydantic import BaseModel
 from typing import List
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
-from langchain_community.chat_models import ChatOllama
-
-
-SYNTHETIC_CUSTOMER_TEXT = (
-    "Honestly, I like what you’re offering, "
-    "but the price feels too high for us right now."
-)
+from langchain_ollama import ChatOllama
 
 AUDIO_FILE = "customer.wav"
 
-def text_to_speech(text: str, output_file: str):
-    engine = pyttsx3.init()
-    engine.save_to_file(text, output_file)
-    engine.runAndWait()
+# SYNTHETIC_CUSTOMER_TEXT = (
+#     "Honestly, I like what you’re offering, "
+#     "but the price feels too high for us right now."
+# )
 
-print("Generating customer audio...")
-text_to_speech(SYNTHETIC_CUSTOMER_TEXT, AUDIO_FILE)
+
+# def text_to_speech(text: str, output_file: str):
+#     engine = pyttsx3.init()
+#     engine.save_to_file(text, output_file)
+#     engine.runAndWait()
+
+# print("Generating customer audio...")
+# text_to_speech(SYNTHETIC_CUSTOMER_TEXT, AUDIO_FILE)
 
 
 class ASR:
@@ -62,16 +62,12 @@ class IntentOutput(BaseModel):
     sentiment: str
     entities: List[str]
 
-
+parser = PydanticOutputParser(pydantic_object=IntentOutput)
 # Intent Extractor
 
-llm = ChatOllama(
-    model="tinyllama", temperature=0
-)
+llm = ChatOllama(model="tinyllama", temperature=0)
 
-parser = PydanticOutputParser(
-    pydantic_object=IntentOutput
-)
+
 
 intent_prompt = ChatPromptTemplate.from_template("""
 You are an intent and sentiment classifier for sales calls.
@@ -90,50 +86,39 @@ Classify:
 intent_chain = intent_prompt | llm | parser
 
 print("Extracting intent and sentiment...")
-# Check whether a local Ollama endpoint is reachable to avoid long hangs
-ollama_reachable = True
-try:
-    sock = socket.create_connection(("localhost", 11434), timeout=1)
-    sock.close()
-except Exception:
-    ollama_reachable = False
 
-if not ollama_reachable:
-    print("Ollama endpoint not reachable on localhost:11434 — skipping LLM step.")
-    intent_result = IntentOutput(intent="other", sentiment="neutral", entities=[])
-else:
+try:
+    intent_result = intent_chain.invoke({
+        "text": cleaned_text,
+        "format_instructions": parser.get_format_instructions()
+    })
+    print("INTENT RESULT:", intent_result)
+except Exception as e:
+    print("Intent parsing failed:", e)
+    # Attempt to get raw model response and parse it; fall back to defaults.
     try:
-        intent_result = intent_chain.invoke({
+        raw_resp = (intent_prompt | llm).invoke({
             "text": cleaned_text,
             "format_instructions": parser.get_format_instructions()
         })
-        print("INTENT RESULT:", intent_result)
-    except Exception as e:
-        print("Intent parsing failed:", e)
-        # Attempt to get raw model response and parse it; fall back to defaults.
-        try:
-            raw_resp = (intent_prompt | llm).invoke({
-                "text": cleaned_text,
-                "format_instructions": parser.get_format_instructions()
-            })
-            print("RAW MODEL RESPONSE:", raw_resp)
-            raw_text = None
-            if hasattr(raw_resp, "content"):
-                raw_text = raw_resp.content
-            elif isinstance(raw_resp, str):
-                raw_text = raw_resp
-            else:
-                raw_text = str(raw_resp)
+        print("RAW MODEL RESPONSE:", raw_resp)
+        raw_text = None
+        if hasattr(raw_resp, "content"):
+            raw_text = raw_resp.content
+        elif isinstance(raw_resp, str):
+            raw_text = raw_resp
+        else:
+            raw_text = str(raw_resp)
 
-            try:
-                intent_result = parser.parse(raw_text)
-                print("Parsed intent from raw response:", intent_result)
-            except Exception as e2:
-                print("Parser failed on raw response:", e2)
-                intent_result = IntentOutput(intent="other", sentiment="neutral", entities=[])
-        except Exception as e3:
-            print("LLM invocation failed while recovering intent:", e3)
+        try:
+            intent_result = parser.parse(raw_text)
+            print("Parsed intent from raw response:", intent_result)
+        except Exception as e2:
+            print("Parser failed on raw response:", e2)
             intent_result = IntentOutput(intent="other", sentiment="neutral", entities=[])
+    except Exception as e3:
+        print("LLM invocation failed while recovering intent:", e3)
+        intent_result = IntentOutput(intent="other", sentiment="neutral", entities=[])
 
 
 # Decision Logic (Rules)
